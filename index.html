@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>Protótipo VR Estéreo - Cardboard / VectorCraft</title>
+
+  <!-- MediaPipe Hands e Camera Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #030712;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #e2e8f0;
+      touch-action: none;
+    }
+
+    #vr-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #stereo-divider {
+      position: fixed;
+      top: 0;
+      left: 50%;
+      width: 1px;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.25);
+      transform: translateX(-0.5px);
+      pointer-events: none;
+      z-index: 5;
+      display: none;
+    }
+
+    .eye-reticle {
+      position: fixed;
+      top: 50%;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: rgba(0, 240, 255, 0.45);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      z-index: 5;
+      display: none;
+    }
+    #reticle-left { left: 25%; }
+    #reticle-right { left: 75%; }
+
+    #start-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+      transition: opacity 0.4s ease;
+    }
+
+    #start-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      background: rgba(56, 189, 248, 0.08);
+      padding: 6px 14px;
+      border-radius: 999px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      font-size: 1.65rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+      color: #f8fafc;
+    }
+
+    p {
+      max-width: 420px;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      color: #94a3b8;
+      margin-bottom: 28px;
+    }
+
+    #start-btn {
+      appearance: none;
+      border: none;
+      outline: none;
+      cursor: pointer;
+      padding: 16px 32px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #020617;
+      background: linear-gradient(135deg, #22d3ee 0%, #38bdf8 100%);
+      border-radius: 14px;
+      box-shadow: 0 0 28px rgba(34, 211, 238, 0.45);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    #start-btn:active {
+      transform: scale(0.97);
+      box-shadow: 0 0 16px rgba(34, 211, 238, 0.35);
+    }
+
+    #status-msg {
+      margin-top: 16px;
+      font-size: 0.8rem;
+      color: #64748b;
+      min-height: 1.2em;
+    }
+
+    /* Estilos nativos embutidos do VectorCraft para o painel de trabalho */
+    #vectorcraft_wrapper {
+      position: relative;
+      width: 1600px;
+      height: 1000px;
+      background: #262626;
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    #vectorcraft_canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;
+    }
+    #vectorcraft_loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #b8b8b8;
+      font: 16px system-ui, sans-serif;
+      pointer-events: none;
+      background: #262626;
+      z-index: 10;
+    }
+  </style>
+
+  <!-- Pré-carregamento do WebAssembly e JS do VectorCraft apontando para a pasta correta -->
+  <link rel="modulepreload" href="./vectorcraft/dist/web/vectorcraft-web-f363360363b5b46b.js" crossorigin="anonymous">
+  <link rel="preload" href="./vectorcraft/dist/web/vectorcraft-web-36ca77dd521e4273_bg.wasm" crossorigin="anonymous" as="fetch" type="application/wasm">
+</head>
+<body>
+  <div id="start-overlay">
+    <div class="badge">WebVR Estéreo • VectorCraft</div>
+    <h1>Experiência Imersiva Cardboard</h1>
+    <p>Gire o celular na horizontal, encaixe no visor Cardboard e interaja com as mãos.</p>
+    <button id="start-btn">Iniciar Experiência Imersiva</button>
+    <div id="status-msg"></div>
+  </div>
+
+  <div id="stereo-divider"></div>
+  <div id="reticle-left" class="eye-reticle"></div>
+  <div id="reticle-right" class="eye-reticle"></div>
+
+  <video id="hand-video" autoplay playsinline muted style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;"></video>
+
+  <canvas id="hand-debug-canvas" width="160" height="120" style="position:fixed;left:8px;bottom:8px;width:136px;height:102px;z-index:15;border:1px solid #22d3ee;border-radius:8px;background:rgba(2,6,23,0.85);pointer-events:none;display:none;"></canvas>
+
+  <canvas id="vr-canvas"></canvas>
+
+  <!-- Container oculto que abriga o Canvas do VectorCraft para ser projetado no mundo 3D via CSS3D -->
+  <div style="display: none;">
+    <div id="vectorcraft_wrapper">
+      <canvas id="vectorcraft_canvas"></canvas>
+      <div id="vectorcraft_loading">Carregando VectorCraft&hellip;</div>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+
+  <!-- Script de Inicialização do WASM do VectorCraft -->
+  <script type="module">
+    import init, * as bindings from './vectorcraft/dist/web/vectorcraft-web-f363360363b5b46b.js';
+    async function loadWasmApp() {
+      try {
+        const wasm = await init({ module_or_path: './vectorcraft/dist/web/vectorcraft-web-36ca77dd521e4273_bg.wasm' });
+        window.wasmBindings = bindings;
+        dispatchEvent(new CustomEvent("TrunkApplicationStarted", { detail: { wasm } }));
+        const loadingEl = document.getElementById("vectorcraft_loading");
+        if (loadingEl) loadingEl.style.display = "none";
+      } catch (err) {
+        console.error("Erro ao carregar o WASM do VectorCraft:", err);
+      }
+    }
+    loadWasmApp();
+  </script>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+    import { CSS3DRenderer, CSS3DObject } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/renderers/CSS3DRenderer.js";
+
+    const IPD = 0.064;
+    const EYE_HEIGHT = 0;
+    const FOV = 75;
+
+    const canvas = document.getElementById("vr-canvas");
+    const overlay = document.getElementById("start-overlay");
+    const startBtn = document.getElementById("start-btn");
+    const statusMsg = document.getElementById("status-msg");
+    const stereoDivider = document.getElementById("stereo-divider");
+    const reticleLeft = document.getElementById("reticle-left");
+    const reticleRight = document.getElementById("reticle-right");
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setScissorTest(true);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+
+    const cssRenderer = new CSS3DRenderer();
+    cssRenderer.setSize(window.innerWidth, window.innerHeight);
+    cssRenderer.domElement.style.position = "absolute";
+    cssRenderer.domElement.style.top = "0";
+    cssRenderer.domElement.style.left = "0";
+    cssRenderer.domElement.style.width = "100%";
+    cssRenderer.domElement.style.height = "100%";
+    cssRenderer.domElement.style.zIndex = "2";
+    cssRenderer.domElement.style.pointerEvents = "none";
+    document.body.appendChild(cssRenderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x030712);
+    scene.fog = new THREE.FogExp2(0x030712, 0.028);
+
+    const headRig = new THREE.Object3D();
+    headRig.position.set(0, EYE_HEIGHT, 0);
+    scene.add(headRig);
+
+    const eyeAspect = (window.innerWidth * 0.5) / window.innerHeight;
+    const cameraL = new THREE.PerspectiveCamera(FOV, eyeAspect, 0.1, 150);
+    cameraL.position.set(-IPD / 2, 0, 0);
+    const cameraR = new THREE.PerspectiveCamera(FOV, eyeAspect, 0.1, 150);
+    cameraR.position.set(IPD / 2, 0, 0);
+
+    headRig.add(cameraL);
+    headRig.add(cameraR);
+
+    function updateViewportSize() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const halfAspect = (width * 0.5) / height;
+      renderer.setSize(width, height);
+      cssRenderer.setSize(width, height);
+      cameraL.aspect = halfAspect;
+      cameraL.updateProjectionMatrix();
+      cameraR.aspect = halfAspect;
+      cameraR.updateProjectionMatrix();
+    }
+    window.addEventListener("resize", updateViewportSize);
+
+    const deviceOrientation = { alpha: 0, beta: 0, gamma: 0, hasData: false };
+    let screenOrientationAngle = 0;
+    function updateScreenOrientation() {
+      screenOrientationAngle = screen.orientation?.angle ?? window.orientation ?? 0;
+    }
+    let areOrientationListenersActive = false;
+    function ensureOrientationListeners() {
+      updateScreenOrientation();
+      if (areOrientationListenersActive) return;
+      areOrientationListenersActive = true;
+      window.addEventListener("orientationchange", updateScreenOrientation);
+      screen.orientation?.addEventListener("change", updateScreenOrientation);
+      window.addEventListener("resize", updateScreenOrientation);
+    }
+    ensureOrientationListeners();
+
+    const zee = new THREE.Vector3(0, 0, 1);
+    const euler = new THREE.Euler();
+    const q0 = new THREE.Quaternion();
+    const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+
+    function updateHeadRotationFromGyro() {
+      const alpha = THREE.MathUtils.degToRad(deviceOrientation.alpha || 0);
+      const beta = THREE.MathUtils.degToRad(deviceOrientation.beta || 0);
+      const gamma = THREE.MathUtils.degToRad(deviceOrientation.gamma || 0);
+      const orient = THREE.MathUtils.degToRad(screenOrientationAngle || 0);
+      euler.set(beta, alpha, -gamma, "YXZ");
+      headRig.quaternion.setFromEuler(euler);
+      headRig.quaternion.multiply(q1);
+      headRig.quaternion.multiply(q0.setFromAxisAngle(zee, -orient));
+    }
+
+    let isGyroListenerActive = false;
+    function handleDeviceOrientation(event) {
+      if (event.alpha !== null || event.beta !== null || event.gamma !== null) {
+        deviceOrientation.alpha = event.alpha || 0;
+        deviceOrientation.beta = event.beta || 0;
+        deviceOrientation.gamma = event.gamma || 0;
+        deviceOrientation.hasData = true;
+      }
+    }
+    function ensureGyroListener() {
+      if (isGyroListenerActive) return;
+      window.addEventListener("deviceorientation", handleDeviceOrientation, true);
+      isGyroListenerActive = true;
+    }
+    if (typeof DeviceOrientationEvent === "undefined" || typeof DeviceOrientationEvent.requestPermission !== "function") {
+      ensureGyroListener();
+    }
+
+    scene.add(new THREE.AmbientLight(0x94a3b8, 0.7));
+    const dirLight = new THREE.DirectionalLight(0x38bdf8, 1.8);
+    dirLight.position.set(5, 10, 4);
+
+    const floorY = -1.6;
+    const mainGrid = new THREE.GridHelper(80, 80, 0x00f0ff, 0x172554);
+    mainGrid.position.y = floorY;
+    scene.add(mainGrid);
+
+    // Insere o container do VectorCraft no espaço 3D via CSS3D
+    const vectorcraftWrapperEl = document.getElementById("vectorcraft_wrapper");
+    const vectorcraftObject = new CSS3DObject(vectorcraftWrapperEl);
+    vectorcraftObject.position.set(0, EYE_HEIGHT, -1.5);
+    vectorcraftObject.scale.set(0.0009, 0.0009, 0.0009);
+    scene.add(vectorcraftObject);
+
+    const handVideo = document.getElementById("hand-video");
+    const handDebugCanvas = document.getElementById("hand-debug-canvas");
+    const handDebugCtx = handDebugCanvas ? handDebugCanvas.getContext("2d") : null;
+    const WORKSPACE_W = 1.44;
+    const WORKSPACE_H = 0.9;
+
+    function createHandState(baseHex, pinchHex) {
+      const div = document.createElement("div");
+      div.style.width = "24px";
+      div.style.height = "24px";
+      div.style.borderRadius = "50%";
+      div.style.backgroundColor = baseHex;
+      div.style.border = "2px solid #ffffff";
+      div.style.boxShadow = `0 0 12px ${baseHex}`;
+      div.style.transform = "translate(-50%, -50%)";
+      div.style.display = "none";
+      div.style.pointerEvents = "none";
+
+      const cursorObject = new CSS3DObject(div);
+      cursorObject.position.set(0, EYE_HEIGHT, -1.45);
+      cursorObject.scale.set(0.0009, 0.0009, 0.0009);
+      scene.add(cursorObject);
+
+      return {
+        cursorElement: div,
+        cursorObject,
+        target: new THREE.Vector3(0, EYE_HEIGHT, -1.45),
+        isPinching: false,
+        baseHex,
+        pinchHex,
+        updateColor(hex) {
+          div.style.backgroundColor = hex;
+          div.style.boxShadow = `0 0 12px ${hex}`;
+        },
+        setScale(scale) {
+          div.style.transform = `translate(-50%, -50%) scale(${scale})`;
+        },
+        setVisible(isVisible) {
+          div.style.display = isVisible ? "block" : "none";
+        }
+      };
+    }
+
+    const handStates = {
+      Right: createHandState("#22d3ee", "#4ade80"),
+      Left: createHandState("#a855f7", "#f472b6"),
+    };
+
+    function onHandResults(results) {
+      const landmarksList = results.multiHandLandmarks || [];
+      const handednessList = results.multiHandedness || [];
+      const seenLabels = new Set();
+
+      for (let i = 0; i < landmarksList.length; i++) {
+        const landmarks = landmarksList[i];
+        const rawLabel = handednessList[i]?.label;
+        let label = rawLabel === "Left" ? "Left" : "Right";
+        if (seenLabels.has(label)) label = label === "Right" ? "Left" : "Right";
+        seenLabels.add(label);
+
+        const state = handStates[label];
+        const indexTip = landmarks[8];
+        const thumbTip = landmarks[4];
+
+        const expandedX = (indexTip.x - 0.5) * 1.35 + 0.5;
+        const expandedY = (indexTip.y - 0.5) * 1.35 + 0.5;
+        const clampedX = THREE.MathUtils.clamp(expandedX, 0, 1);
+        const clampedY = THREE.MathUtils.clamp(expandedY, 0, 1);
+
+        state.target.set(
+          (clampedX - 0.5) * WORKSPACE_W,
+          EYE_HEIGHT + (0.5 - clampedY) * WORKSPACE_H,
+          -1.45
+        );
+        state.setVisible(true);
+        state.cursorObject.position.lerp(state.target, 0.45);
+
+        const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+        if (!state.isPinching && pinchDist < 0.055) {
+          state.isPinching = true;
+          state.updateColor(state.pinchHex);
+          state.setScale(1.45);
+        } else if (state.isPinching && pinchDist > 0.075) {
+          state.isPinching = false;
+          state.updateColor(state.baseHex);
+          state.setScale(1.0);
+        }
+      }
+
+      for (const label of ["Right", "Left"]) {
+        if (!seenLabels.has(label)) {
+          const state = handStates[label];
+          state.setVisible(false);
+          state.isPinching = false;
+          state.updateColor(state.baseHex);
+          state.setScale(1.0);
+        }
+      }
+    }
+
+    let isHandTrackingStarted = false;
+    async function startHandTracking() {
+      if (isHandTrackingStarted) return;
+      if (typeof window.Hands === "undefined" || typeof window.Camera === "undefined") return;
+      if (!navigator.mediaDevices?.getUserMedia) return;
+
+      isHandTrackingStarted = true;
+      if (handDebugCanvas) handDebugCanvas.style.display = "block";
+
+      try {
+        const hands = new window.Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+        });
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+        hands.onResults(onHandResults);
+        if (typeof hands.initialize === "function") {
+          await hands.initialize();
+        }
+
+        let isProcessingHandFrame = false;
+        const handCamera = new window.Camera(handVideo, {
+          onFrame: async () => {
+            if (handVideo.readyState >= 2 && !isProcessingHandFrame) {
+              isProcessingHandFrame = true;
+              try {
+                await hands.send({ image: handVideo });
+              } finally {
+                isProcessingHandFrame = false;
+              }
+            }
+          },
+          width: 640,
+          height: 480,
+          facingMode: "environment",
+        });
+        await handCamera.start();
+      } catch (err) {
+        isHandTrackingStarted = false;
+        throw err;
+      }
+    }
+
+    startBtn.addEventListener("click", async () => {
+      statusMsg.textContent = "Ativando sensores...";
+      try {
+        if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
+          const permission = await DeviceOrientationEvent.requestPermission();
+          if (permission === "granted") {
+            ensureGyroListener();
+          }
+        } else {
+          ensureGyroListener();
+        }
+
+        const el = document.documentElement;
+        if (el.requestFullscreen) {
+          await el.requestFullscreen({ navigationUI: "hide" }).catch(() => {});
+        }
+        if (screen.orientation?.lock) {
+          await screen.orientation.lock("landscape").catch(() => {});
+        }
+
+        ensureOrientationListeners();
+        updateViewportSize();
+
+        stereoDivider.style.display = "block";
+        reticleLeft.style.display = "block";
+        reticleRight.style.display = "block";
+        overlay.classList.add("hidden");
+        startRenderLoop();
+
+        startHandTracking().catch((err) => {
+          console.warn("Rastreamento de mãos indisponível:", err);
+        });
+      } catch (error) {
+        statusMsg.textContent = "Erro: " + error.message;
+      }
+    });
+
+    const clock = new THREE.Clock();
+    let renderLoopId = null;
+    function animate() {
+      renderLoopId = requestAnimationFrame(animate);
+      if (deviceOrientation.hasData) updateHeadRotationFromGyro();
+
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const halfWidth = Math.floor(width / 2);
+
+      renderer.setViewport(0, 0, halfWidth, height);
+      renderer.setScissor(0, 0, halfWidth, height);
+      renderer.render(scene, cameraL);
+
+      renderer.setViewport(halfWidth, 0, width - halfWidth, height);
+      renderer.setScissor(halfWidth, 0, width - halfWidth, height);
+      renderer.render(scene, cameraR);
+
+      cssRenderer.render(scene, cameraL);
+    }
+    function startRenderLoop() {
+      if (renderLoopId === null) {
+        animate();
+      }
+    }
+    startRenderLoop();
+  </script>
+</body>
+</html>
