@@ -186,7 +186,7 @@
   <div id="reticle-left" class="eye-reticle"></div>
   <div id="reticle-right" class="eye-reticle"></div>
 
-  <video id="hand-video" autoplay playsinline muted style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;"></video>
+  <video id="hand-video" autoplay playsinline muted style="position:fixed;left:0;top:0;width:320px;height:240px;opacity:0.001;z-index:-1;pointer-events:none;"></video>
 
   <canvas id="hand-debug-canvas" width="160" height="120" style="position:fixed;left:8px;bottom:8px;width:136px;height:102px;z-index:15;border:1px solid #22d3ee;border-radius:8px;background:rgba(2,6,23,0.85);pointer-events:none;display:none;"></canvas>
 
@@ -403,10 +403,68 @@
       Left: createHandState("#a855f7", "#f472b6"),
     };
 
+    const HAND_EDGES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+    const FINGERTIPS = [
+      { index: 4, color: "#f43f5e" },  // Polegar
+      { index: 8, color: "#22d3ee" },  // Indicador
+      { index: 12, color: "#4ade80" }, // Médio
+      { index: 16, color: "#facc15" }, // Anelar
+      { index: 20, color: "#a855f7" }, // Mínimo
+    ];
+    let latestDetectedHands = [];
+
+    function drawHandDebug(detectedHands) {
+      if (!handDebugCtx || !handDebugCanvas) return;
+      handDebugCtx.clearRect(0, 0, handDebugCanvas.width, handDebugCanvas.height);
+      if (handVideo.readyState >= 2) {
+        handDebugCtx.drawImage(handVideo, 0, 0, handDebugCanvas.width, handDebugCanvas.height);
+      }
+
+      for (const { landmarks, label } of detectedHands) {
+        const palette = label === "Left" ? { bone: "#a855f7", joint: "#f472b6" } : { bone: "#22d3ee", joint: "#38bdf8" };
+
+        handDebugCtx.strokeStyle = palette.bone;
+        handDebugCtx.lineWidth = 2;
+        for (const [s, e] of HAND_EDGES) {
+          const p1 = landmarks[s], p2 = landmarks[e];
+          if (p1 && p2) {
+            handDebugCtx.beginPath();
+            handDebugCtx.moveTo(p1.x * handDebugCanvas.width, p1.y * handDebugCanvas.height);
+            handDebugCtx.lineTo(p2.x * handDebugCanvas.width, p2.y * handDebugCanvas.height);
+            handDebugCtx.stroke();
+          }
+        }
+
+        handDebugCtx.fillStyle = palette.joint;
+        for (let j = 0; j < landmarks.length; j++) {
+          const pt = landmarks[j];
+          if (!pt) continue;
+          handDebugCtx.beginPath();
+          handDebugCtx.arc(pt.x * handDebugCanvas.width, pt.y * handDebugCanvas.height, 1.8, 0, Math.PI * 2);
+          handDebugCtx.fill();
+        }
+
+        for (const { index, color } of FINGERTIPS) {
+          const tip = landmarks[index];
+          if (!tip) continue;
+          const x = tip.x * handDebugCanvas.width;
+          const y = tip.y * handDebugCanvas.height;
+          handDebugCtx.beginPath();
+          handDebugCtx.arc(x, y, 4, 0, Math.PI * 2);
+          handDebugCtx.fillStyle = color;
+          handDebugCtx.fill();
+          handDebugCtx.lineWidth = 1;
+          handDebugCtx.strokeStyle = "#ffffff";
+          handDebugCtx.stroke();
+        }
+      }
+    }
+
     function onHandResults(results) {
       const landmarksList = results.multiHandLandmarks || [];
       const handednessList = results.multiHandedness || [];
       const seenLabels = new Set();
+      const detectedHands = [];
 
       for (let i = 0; i < landmarksList.length; i++) {
         const landmarks = landmarksList[i];
@@ -414,6 +472,7 @@
         let label = rawLabel === "Left" ? "Left" : "Right";
         if (seenLabels.has(label)) label = label === "Right" ? "Left" : "Right";
         seenLabels.add(label);
+        detectedHands.push({ landmarks, label });
 
         const state = handStates[label];
         const indexTip = landmarks[8];
@@ -453,13 +512,18 @@
           state.setScale(1.0);
         }
       }
+
+      latestDetectedHands = detectedHands;
+      drawHandDebug(detectedHands);
     }
 
     let isHandTrackingStarted = false;
+
     async function startHandTracking() {
       if (isHandTrackingStarted) return;
-      if (typeof window.Hands === "undefined" || typeof window.Camera === "undefined") return;
-      if (!navigator.mediaDevices?.getUserMedia) return;
+      handVideo.style.transform = "none";
+      if (handDebugCanvas) handDebugCanvas.style.transform = "none";
+      if (typeof window.Hands === "undefined") return;
 
       isHandTrackingStarted = true;
       if (handDebugCanvas) handDebugCanvas.style.display = "block";
@@ -468,29 +532,47 @@
         const hands = new window.Hands({
           locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
         });
-        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6, selfieMode: false });
         hands.onResults(onHandResults);
         if (typeof hands.initialize === "function") {
           await hands.initialize();
         }
 
+        // Força a abertura direta da câmara traseira via MediaStream nativo para máxima compatibilidade mobile
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } }
+        }).catch(() => navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } }
+        }));
+
+        handVideo.srcObject = stream;
+        await handVideo.play();
+
+        // Atualiza o vídeo continuamente no canvas de debug para garantir taxa de frames fluida (60fps)
+        const updateDebugVideoFeed = () => {
+          if (handVideo.readyState >= 2) {
+            drawHandDebug(latestDetectedHands);
+          }
+          requestAnimationFrame(updateDebugVideoFeed);
+        };
+        updateDebugVideoFeed();
+
         let isProcessingHandFrame = false;
-        const handCamera = new window.Camera(handVideo, {
-          onFrame: async () => {
-            if (handVideo.readyState >= 2 && !isProcessingHandFrame) {
-              isProcessingHandFrame = true;
-              try {
-                await hands.send({ image: handVideo });
-              } finally {
-                isProcessingHandFrame = false;
-              }
+        const sendFrameToMediaPipe = async () => {
+          if (handVideo.readyState >= 2 && !isProcessingHandFrame) {
+            isProcessingHandFrame = true;
+            try {
+              await hands.send({ image: handVideo });
+            } catch (e) {
+              console.warn("Erro no frame do MediaPipe:", e);
+            } finally {
+              isProcessingHandFrame = false;
             }
-          },
-          width: 640,
-          height: 480,
-          facingMode: "environment",
-        });
-        await handCamera.start();
+          }
+          requestAnimationFrame(sendFrameToMediaPipe);
+        };
+        sendFrameToMediaPipe();
+
       } catch (err) {
         isHandTrackingStarted = false;
         throw err;
