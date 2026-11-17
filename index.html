@@ -213,7 +213,9 @@
     import init, * as bindings from './vectorcraft/dist/web/vectorcraft-web-f363360363b5b46b.js';
     async function loadWasmApp() {
       try {
-        const wasm = await init({ module_or_path: './vectorcraft/dist/web/vectorcraft-web-36ca77dd521e4273_bg.wasm' });
+        // Aponta diretamente para o link permanente da sua Release no GitHub
+        const wasmUrl = "https://github.com/AnaJuhMilano/Hologram/releases/download/v1.0/vectorcraft-web-36ca77dd521e4273_bg.wasm";
+        const wasm = await init({ module_or_path: wasmUrl });
         window.wasmBindings = bindings;
         dispatchEvent(new CustomEvent("TrunkApplicationStarted", { detail: { wasm } }));
         const loadingEl = document.getElementById("vectorcraft_loading");
