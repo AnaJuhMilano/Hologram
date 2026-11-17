@@ -355,6 +355,11 @@
     vectorcraftObject.scale.set(0.0009, 0.0009, 0.0009);
     scene.add(vectorcraftObject);
 
+    // Variáveis de controle para o redimensionamento dinâmico por gestos de mãos
+    let isWindowResizing = false;
+    let initialHandDistance = 0;
+    let baseWindowScale = 0.0009; // Escala inicial padrão do VectorCraft (1600x1000px)
+
     const handVideo = document.getElementById("hand-video");
     const handDebugCanvas = document.getElementById("hand-debug-canvas");
     const handDebugCtx = handDebugCanvas ? handDebugCanvas.getContext("2d") : null;
@@ -511,6 +516,50 @@
           state.updateColor(state.baseHex);
           state.setScale(1.0);
         }
+      }
+
+      // LÓGICA DE REDIMENSIONAMENTO POR GESTO DE DUAS MÃOS
+      const leftHand = detectedHands.find(h => h.label === "Left");
+      const rightHand = detectedHands.find(h => h.label === "Right");
+
+      if (leftHand && rightHand) {
+        // Usa os indicadores (índice 8) de ambas as mãos como cantos da moldura
+        const lTip = leftHand.landmarks[8];
+        const rTip = rightHand.landmarks[8];
+        
+        // Distância euclidiana entre as duas mãos no espaço normalizado
+        const currentDistance = Math.hypot(rTip.x - lTip.x, rTip.y - lTip.y);
+
+        // Verifica se ambas as mãos fizeram gesto de pinça (indicador + polegar juntos nas duas mãos)
+        const lThumb = leftHand.landmarks[4];
+        const rThumb = rightHand.landmarks[4];
+        const leftPinch = Math.hypot(lTip.x - lThumb.x, lTip.y - lThumb.y) < 0.055;
+        const rightPinch = Math.hypot(rTip.x - rThumb.x, rThumb.y - rThumb.y) < 0.055;
+
+        if (leftPinch && rightPinch) {
+          // Se ambas pinçarem, "trava" e encerra a ação de redimensionamento
+          if (isWindowResizing) {
+            isWindowResizing = false;
+            console.log("[Hologram] Redimensionamento travado/encerrado via pinça dupla.");
+          }
+        } else {
+          // Se afastar ou aproximar as mãos sem pinça ativa, redimensiona dinamicamente
+          if (!isWindowResizing) {
+            isWindowResizing = true;
+            initialHandDistance = currentDistance;
+            baseWindowScale = vectorcraftObject.scale.x; // Guarda a escala atual
+          } else if (initialHandDistance > 0) {
+            // Calcula a proporção de aumento ou redução
+            const scaleFactor = currentDistance / initialHandDistance;
+            const newScale = THREE.MathUtils.clamp(baseWindowScale * scaleFactor, 0.0004, 0.0018);
+            
+            // Aplica a nova escala uniformemente na janela 3D
+            vectorcraftObject.scale.set(newScale, newScale, newScale);
+          }
+        }
+      } else {
+        // Se perder uma das mãos de vista, pausa o redimensionamento dinâmico
+        isWindowResizing = false;
       }
 
       latestDetectedHands = detectedHands;
